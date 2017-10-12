@@ -40,7 +40,7 @@ Shader "Hidden/Unlit/Transparent Colored 1"
 				float4 vertex : POSITION;
 				half4 color : COLOR;
 				float2 texcoord : TEXCOORD0;
-				UNITY_VERTEX_INPUT_INSTANCE_ID
+				UNITY_INSTANCE_ID
 			};
 
 			struct v2f

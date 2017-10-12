@@ -40,7 +40,7 @@ Shader "Hidden/Unlit/Transparent Colored (TextureClip)"
 				float4 vertex : POSITION;
 				float2 texcoord : TEXCOORD0;
 				half4 color : COLOR;
-				UNITY_VERTEX_INPUT_INSTANCE_ID
+				UNITY_INSTANCE_ID
 			};
 
 			struct v2f
