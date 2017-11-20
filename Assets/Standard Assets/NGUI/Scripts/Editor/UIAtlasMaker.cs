@@ -514,8 +514,9 @@ public class UIAtlasMaker : EditorWindow
 	{
 		ShowProgress(0f);
 
-		// Make the atlas texture readable
-		Texture2D tex = NGUIEditorTools.ImportTexture(atlas.texture, true, true, false);
+        TextureAlphaSpliter.UseRgbaTex(atlas);
+        // Make the atlas texture readable
+        Texture2D tex = NGUIEditorTools.ImportTexture(atlas.texture, true, true, false);
 
 		if (tex != null)
 		{
@@ -564,12 +565,34 @@ public class UIAtlasMaker : EditorWindow
 	{
 		// Get the texture for the atlas
 		Texture2D tex = atlas.texture as Texture2D;
+        bool success=TextureAlphaSpliter.UseRgbaTex(atlas);
+        if (success) tex = atlas.texture as Texture2D;
+        //bool isRGB = tex != null && tex.name.Contains("(rgb)");
+        //if (isRGB)
+        //{
+        //    var srcTex = TextureAlphaSpliter.GetUIRgbaTex(tex);
+        //    if (srcTex != null) {
+        //    tex = srcTex;
+        //    atlas.spriteMaterial.SetTexture("_MainTex", tex);
+        //    }
+        //    else
+        //    {
+        //        Debug.LogErrorFormat("找不到图集={0}的原图(rgba)", atlas.name);
+        //    }
+        //}
 		string oldPath = (tex != null) ? AssetDatabase.GetAssetPath(tex.GetInstanceID()) : "";
 		string newPath = NGUIEditorTools.GetSaveableTexturePath(atlas);
 
 		// Clear the read-only flag in texture file attributes
 		if (System.IO.File.Exists(newPath))
 		{
+#if !UNITY_4_1 && !UNITY_4_0 && !UNITY_3_5
+			if (!AssetDatabase.IsOpenForEdit(newPath))
+			{
+				Debug.LogError(newPath + " is not editable. Did you forget to do a check out?");
+				return false;
+			}
+#endif
 			System.IO.FileAttributes newPathAttrs = System.IO.File.GetAttributes(newPath);
 			newPathAttrs &= ~System.IO.FileAttributes.ReadOnly;
 			System.IO.File.SetAttributes(newPath, newPathAttrs);
@@ -701,10 +724,10 @@ public class UIAtlasMaker : EditorWindow
 
 	static public void UpdateAtlas (UIAtlas atlas, List<SpriteEntry> sprites)
 	{
-		if (sprites.Count > 0)
+        if (sprites.Count > 0)
 		{
-			// Combine all sprites into a single texture and save it
-			if (UpdateTexture(atlas, sprites))
+            // Combine all sprites into a single texture and save it
+            if (UpdateTexture(atlas, sprites))
 			{
 				// Replace the sprites within the atlas
 				ReplaceSprites(atlas, sprites);
@@ -713,7 +736,27 @@ public class UIAtlasMaker : EditorWindow
 			// Release the temporary textures
 			ReleaseSprites(sprites);
 			EditorUtility.ClearProgressBar();
-			return;
+            //process through seperating rgb and a 
+            Texture rgb, alpha;
+            TextureAlphaSpliter.SplitAlpha(atlas.texture, false, out rgb, out alpha);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            Debug.Log("分离为rgb+alpha 贴图");
+            //update mat
+            var rgba = atlas.texture;
+            var mat = atlas.spriteMaterial;
+            mat.shader = Shader.Find("Unlit/Transparent Colored Alpha");
+            mat.SetTexture("_AlphaTex", alpha);
+            mat.SetTexture("_MainTex", rgb);
+            Debug.Log("重设material");
+            //save src pic
+            var src = AssetDatabase.GetAssetPath(rgba);
+            TextureAlphaSpliter.SaveUIRgbaTexture(src);
+            Debug.Log("保存rgba");
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            return;
 		}
 		else
 		{
@@ -726,12 +769,13 @@ public class UIAtlasMaker : EditorWindow
 		atlas.MarkAsChanged();
 		Selection.activeGameObject = (NGUISettings.atlas != null) ? NGUISettings.atlas.gameObject : null;
 		EditorUtility.ClearProgressBar();
-	}
+    }
 
-	/// <summary>
-	/// Draw the UI for this tool.
-	/// </summary>
+    /// <summary>
+    /// Draw the UI for this tool.
+    /// </summary>
 
+    Texture cachedRgba;
 	void OnGUI ()
 	{
 		if (mLastAtlas != NGUISettings.atlas)
@@ -764,8 +808,11 @@ public class UIAtlasMaker : EditorWindow
 			Material mat = NGUISettings.atlas.spriteMaterial;
 			Texture tex = NGUISettings.atlas.texture;
 
-			// Material information
-			GUILayout.BeginHorizontal();
+            if (cachedRgba == null||(tex!=null&&!tex.name.Contains(cachedRgba.name)))
+                cachedRgba = TextureAlphaSpliter.GetUIRgbaTex(tex);
+
+            // Material information
+            GUILayout.BeginHorizontal();
 			{
 				if (mat != null)
 				{
@@ -797,9 +844,20 @@ public class UIAtlasMaker : EditorWindow
 					GUI.color = Color.white;
 					GUILayout.Label(" N/A");
 				}
+
 			}
 			GUILayout.EndHorizontal();
-		}
+
+            GUILayout.BeginHorizontal();
+            if (cachedRgba != null)
+            {
+                if (GUILayout.Button("原图", GUILayout.Width(76f))) {
+                    Selection.activeObject = cachedRgba;
+                }
+                GUILayout.Label(" " + cachedRgba.width + "x" + cachedRgba.height);
+            }
+            GUILayout.EndHorizontal();
+        }
 
 		GUILayout.BeginHorizontal();
 		NGUISettings.atlasPadding = Mathf.Clamp(EditorGUILayout.IntField("Padding", NGUISettings.atlasPadding, GUILayout.Width(100f)), 0, 8);
@@ -850,24 +908,16 @@ public class UIAtlasMaker : EditorWindow
 		//GUILayout.Label("or replace with trimmed pixels", GUILayout.MinWidth(70f));
 		//GUILayout.EndHorizontal();
 
-		#if !UNITY_5_6
 		GUILayout.BeginHorizontal();
 		NGUISettings.unityPacking = EditorGUILayout.Toggle("Unity Packer", NGUISettings.unityPacking, GUILayout.Width(100f));
 		GUILayout.Label("or custom packer", GUILayout.MinWidth(70f));
 		GUILayout.EndHorizontal();
-		#endif
 
 		GUILayout.BeginHorizontal();
 		NGUISettings.trueColorAtlas = EditorGUILayout.Toggle("Truecolor", NGUISettings.trueColorAtlas, GUILayout.Width(100f));
 		GUILayout.Label("force ARGB32 textures", GUILayout.MinWidth(70f));
 		GUILayout.EndHorizontal();
 
-		GUILayout.BeginHorizontal();
-		NGUISettings.autoUpgradeSprites = EditorGUILayout.Toggle("Auto-upgrade", NGUISettings.trueColorAtlas, GUILayout.Width(100f));
-		GUILayout.Label("replace textures with sprites", GUILayout.MinWidth(70f));
-		GUILayout.EndHorizontal();
-
-		#if !UNITY_5_6
 		if (!NGUISettings.unityPacking)
 		{
 			GUILayout.BeginHorizontal();
@@ -875,7 +925,6 @@ public class UIAtlasMaker : EditorWindow
 			GUILayout.Label("if on, forces a square atlas texture", GUILayout.MinWidth(70f));
 			GUILayout.EndHorizontal();
 		}
-		#endif
 
 #if UNITY_IPHONE || UNITY_ANDROID
 		GUILayout.BeginHorizontal();
@@ -1061,7 +1110,7 @@ public class UIAtlasMaker : EditorWindow
 				{
 					NGUIEditorTools.SelectSprite(selection);
 				}
-				else if (NGUISettings.autoUpgradeSprites && (update || replace))
+				else if (update || replace)
 				{
 					NGUIEditorTools.UpgradeTexturesToSprites(NGUISettings.atlas);
 					NGUIEditorTools.RepaintSprites();
